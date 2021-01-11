@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\GarminActivity;
 use Ballen\Distical\Calculator as DistanceCalculator;
 use Ballen\Distical\Entities\LatLong;
 use DateTime;
@@ -76,6 +77,21 @@ class testDistance extends Command
             return strpos($filename, '.tcx') !== false;
         });
 
+        $this->import($files);
+
+        GarminActivity::all()->each(function ($garminActivity) {
+            $xml = XmlParser::extract($garminActivity->xml);
+            $tracks = $xml->parse([
+                'Author' => ['uses' => 'Author.Name'],
+                'date' => ['uses' => 'Activities.Activity.Id'],
+                'points' => ['uses' => 'Activities.Activity.Lap[Calories,Track{Trackpoint{Time>time,DistanceMeters>distance}>trackpoints}>tracks]'],
+            ]);
+
+            $this->traverseTrack($tracks);
+        });
+
+        return;
+
         foreach ($files as $file) {
             $filePath = storage_path('app/public/' . $file);
 
@@ -91,6 +107,40 @@ class testDistance extends Command
             ]);
 
             $this->traverseTrack($tracks);
+        }
+    }
+
+    private function import(array $files): void
+    {
+        foreach ($files as $file) {
+            $filePath = storage_path('app/public/' . $file);
+
+            if (!file_exists($filePath)) {
+                continue;
+            }
+
+            $matches = [];
+            preg_match('/activity_(\d+)\.tcx$/', $file, $matches);
+            if (empty($matches[1])) {
+                continue;
+            }
+
+            $activityId = $matches[1];
+
+            if (GarminActivity::where('activity_id', $activityId)->exists()) {
+                continue;
+            }
+
+            $xml = file_get_contents($filePath);
+
+            if (!$xml) {
+                continue;
+            }
+
+            GarminActivity::create([
+                'activity_id' => $activityId,
+                'xml' => $xml,
+            ]);
         }
     }
 
