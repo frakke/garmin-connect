@@ -4,7 +4,9 @@ namespace App\Console\Commands;
 
 use Ballen\Distical\Calculator as DistanceCalculator;
 use Ballen\Distical\Entities\LatLong;
+use DateTime;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Storage;
 use Orchestra\Parser\Xml\Facade as XmlParser;
 
 class testDistance extends Command
@@ -65,25 +67,35 @@ class testDistance extends Command
 
         // Exported data file:
         // storage/app/public/garminConnect/activity_6078298164.tcx
+        // https://connect.garmin.com/modern/activities
+        //   .activity-list-page-wrapper li .activity-name-edit a
+        // https://connect.garmin.com/modern/proxy/download-service/export/tcx/activity/6069506796
 
-        $filePath = storage_path('app/public/garminConnect/activity_6078298164.tcx');
-        $xml = XmlParser::load($filePath);
-        //var_dump($xml->getContent());
-        $tracks = $xml->parse([
-            'Author' => ['uses' => 'Author.Name'],
-            'id' => ['uses' => 'Activities.Activity.Id'],
-            /*'time' => ['uses' => 'Activities.Activity.Lap.Track.Trackpoint.Time'],
-            'distance' => ['uses' => 'Activities.Activity.Lap.Track.Trackpoint.DistanceMeters'],
-            'tracks' => [
-                'uses' => 'Activities.Activity.Lap.Track',
-                'track' => ['uses' => 'Trackpoint.DistanceMeters'],
-            ],*/
-            'points' => ['uses' => 'Activities.Activity.Lap.Track.Trackpoint[Time>time,DistanceMeters>distance]'],
-        ]);
+        $files = Storage::disk('public')->files('garminConnect');
+        $files = array_filter($files, function ($filename) {
+            return strpos($filename, '.tcx') !== false;
+        });
 
+        foreach ($files as $file) {
+            $filePath = storage_path('app/public/' . $file);
 
-        //var_dump($tracks);
+            if (!file_exists($filePath)) {
+                continue;
+            }
+            
+            $xml = XmlParser::load($filePath);
+            $tracks = $xml->parse([
+                'Author' => ['uses' => 'Author.Name'],
+                'date' => ['uses' => 'Activities.Activity.Id'],
+                'points' => ['uses' => 'Activities.Activity.Lap[Calories,Track{Trackpoint{Time>time,DistanceMeters>distance}>trackpoints}>tracks]'],
+            ]);
 
+            $this->traverseTrack($tracks);
+        }
+    }
+
+    private function traverseTrack($tracks)
+    {   
         $lapDistance = 1000;
         $currentInterval = 0;
         $lastTime = 0;
@@ -98,72 +110,79 @@ class testDistance extends Command
         $laps = [];
         $key = 0;
         foreach ($tracks['points'] as $track) {
-            $date = \DateTime::createFromFormat('Y-m-d\TH:i:s.vP', $track['time']);
-            $time = (double) ($date->getTimestamp().','.$date->format('u'));
+            foreach ($track['tracks'] as $trackpoints) {
+                foreach ($trackpoints['trackpoints'] as $trackpoint) {
+                    $date = DateTime::createFromFormat('Y-m-d\TH:i:s.vP', $trackpoint['time']);
+                    $time = (double) ($date->getTimestamp().','.$date->format('u'));
 
 
-            $distance = (double) $track['distance'];
+                    $distance = (double) $trackpoint['distance'];
 
-            // Starting point.
-            if (count($laps) == 0) {
-                $laps[$key] = [
-                    'time' => 0,
-                    'distance' => $distance,
-                ];
+                    // Starting point.
+                    if (count($laps) == 0) {
+                        $laps[$key] = [
+                            'time' => 0,
+                            'distance' => $distance,
+                        ];
 
-                $lastDistance = $distance;
-                $lastTime = $time;
+                        $lastDistance = $distance;
+                        $lastTime = $time;
 
-                continue;
+                        continue;
+                    }
+
+                    $distanceSegment = $distance - $lastDistance;
+                    $timeSegment = $time - $lastTime;
+
+                    // Skip standing still.
+                    if ($distanceSegment < 2) {
+                        $lastDistance = $distance;
+                        $lastTime = $time;
+
+                        continue;
+                    }
+
+                    $allSegments[] = [
+                        'time' => $timeSegment,
+                        'distance' => $distanceSegment,
+                    ];
+
+                    if ($laps[$key]['distance'] + $distanceSegment > $lapDistance) {
+                        $leftOverDistance = fmod($laps[$key]['distance'] + $distanceSegment, $lapDistance);
+                        $leftOverTime = $timeSegment * $leftOverDistance / $distanceSegment;
+
+                        $laps[$key]['time'] += $timeSegment - $leftOverTime;
+                        $laps[$key]['distance'] += $distanceSegment - $leftOverDistance;
+
+                        $key++;
+
+                        $laps[$key] = [
+                            'time' => $leftOverTime,
+                            'distance' => $leftOverDistance,
+                        ];
+
+                        $leftOverTime = 0;
+                        $leftOverDistance = 0;
+
+                        $lastDistance = $distance;
+                        $lastTime = $time;
+
+                        continue;
+                    }
+
+                    $laps[$key]['time'] += $timeSegment;
+                    $laps[$key]['distance'] += $distanceSegment;
+                    
+                    $lastDistance = $distance;
+                    $lastTime = $time;
+                }
             }
-
-            $distanceSegment = $distance - $lastDistance;
-            $timeSegment = $time - $lastTime;
-
-            //echo $distanceSegment . " ";
-
-            // Skip standing still.
-            if ($distanceSegment < 4) {
-                $lastDistance = $distance;
-                $lastTime = $time;
-
-                continue;
-            }
-
-            $allSegments[] = [
-                'time' => $timeSegment,
-                'distance' => $distanceSegment,
-            ];
-
-            if ($laps[$key]['distance'] + $distanceSegment > $lapDistance) {
-                $leftOverDistance = fmod($laps[$key]['distance'] + $distanceSegment, $lapDistance);
-                $leftOverTime = $timeSegment * $leftOverDistance / $distanceSegment;
-
-                $laps[$key]['time'] += $timeSegment - $leftOverTime;
-                $laps[$key]['distance'] += $distanceSegment - $leftOverDistance;
-
-                $key++;
-
-                $laps[$key] = [
-                    'time' => $leftOverTime,
-                    'distance' => $leftOverDistance,
-                ];
-
-                $leftOverTime = 0;
-                $leftOverDistance = 0;
-
-                $lastDistance = $distance;
-                $lastTime = $time;
-
-                continue;
-            }
-
-            $laps[$key]['time'] += $timeSegment;
-            $laps[$key]['distance'] += $distanceSegment;
-            
-            $lastDistance = $distance;
-            $lastTime = $time;
         }
+
+        echo str_pad('', 43, '=') . "\n";
+        
+        $date = DateTime::createFromFormat('Y-m-d\TH:i:s.vP', $tracks['date']);
+        echo sprintf("%s\n", $date->format('D j. F Y'));
 
         echo str_pad('', 43, '-') . "\n";
         echo sprintf("%s %s %s %s\n",
@@ -198,7 +217,7 @@ class testDistance extends Command
     {
         return sprintf('%s:%s',
             str_pad(floor($seconds / 60), 2, 0, STR_PAD_LEFT),
-            str_pad(floor($seconds % 60), 2, 0, STR_PAD_RIGHT),
+            str_pad(floor($seconds % 60), 2, 0, STR_PAD_LEFT),
         );
     }
 
@@ -222,6 +241,7 @@ class testDistance extends Command
                 // Adjust for distances in segments being smaller than the target distance by taking the
                 // average speed by measured distance and multiply it up.
                 $speed = array_sum($times) * ($lapDistance / array_sum($distances));
+                $speed = array_sum($times);
                 if (is_null($fastestSpeed)) {
                     $fastestSpeed = $speed;
                 }
