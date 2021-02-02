@@ -20,7 +20,7 @@ class GarminActivity extends Model
 
     public function formatTime($seconds): string
     {
-        return sprintf('%s:%s',
+        return sprintf('%s:%s min',
             str_pad(floor($seconds / 60), 2, 0, STR_PAD_LEFT),
             str_pad(floor($seconds % 60), 2, 0, STR_PAD_LEFT),
         );
