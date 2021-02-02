@@ -16,7 +16,12 @@ class CreateGarminActivitiesTable extends Migration
         Schema::create('garmin_activities', function (Blueprint $table) {
             $table->id();
             $table->string('activity_id')->unique();
+            // title
             $table->longText('xml');
+            $table->integer('fastest_1km')->default(0);
+            $table->integer('fastest_5km')->default(0);
+            $table->integer('fastest_10km')->default(0);
+            $table->integer('fastest_21km')->default(0);
             $table->timestamps();
         });
     }

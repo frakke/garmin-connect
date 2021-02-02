@@ -79,15 +79,17 @@ class testDistance extends Command
 
         $this->import($files);
 
+        return;
+
         GarminActivity::all()->each(function ($garminActivity) {
             $xml = XmlParser::extract($garminActivity->xml);
             $tracks = $xml->parse([
                 'Author' => ['uses' => 'Author.Name'],
                 'date' => ['uses' => 'Activities.Activity.Id'],
-                'points' => ['uses' => 'Activities.Activity.Lap[Calories,Track{Trackpoint{Time>time,DistanceMeters>distance}>trackpoints}>tracks]'],
+                'data' => ['uses' => 'Activities.Activity.Lap[Calories,Track{Trackpoint{Time>time,DistanceMeters>distance}>trackpoints}>laps]'],
             ]);
 
-            $this->traverseTrack($tracks);
+            $this->traverseLaps($tracks);
         });
 
         return;
@@ -103,13 +105,19 @@ class testDistance extends Command
             $tracks = $xml->parse([
                 'Author' => ['uses' => 'Author.Name'],
                 'date' => ['uses' => 'Activities.Activity.Id'],
-                'points' => ['uses' => 'Activities.Activity.Lap[Calories,Track{Trackpoint{Time>time,DistanceMeters>distance}>trackpoints}>tracks]'],
+                'data' => ['uses' => 'Activities.Activity.Lap[Calories,Track{Trackpoint{Time>time,DistanceMeters>distance}>trackpoints}>laps]'],
             ]);
 
-            $this->traverseTrack($tracks);
+            $this->traverseLaps($tracks);
         }
     }
 
+    /**
+     * Create GarminActivities from file paths.
+     * 
+     * @param array $files
+     * @return void
+     */
     private function import(array $files): void
     {
         foreach ($files as $file) {
@@ -137,15 +145,40 @@ class testDistance extends Command
                 continue;
             }
 
+            $laps = $this->unpackLaps($xml);
+            $data = $this->traverseLaps($laps);
+
             GarminActivity::create([
                 'activity_id' => $activityId,
                 'xml' => $xml,
+                'fastest_1km' => $data['fastest_1km'],
+                'fastest_5km' => $data['fastest_5km'],
+                'fastest_10km' => $data['fastest_10km'],
+                'fastest_21km' => $data['fastest_21km'],
             ]);
         }
     }
 
-    private function traverseTrack($tracks)
+    private function unpackLaps(string $xmlString): array
+    {
+        $xml = XmlParser::extract($xmlString);
+        $laps = $xml->parse([
+            'Author' => ['uses' => 'Author.Name'],
+            'date' => ['uses' => 'Activities.Activity.Id'],
+            'data' => ['uses' => 'Activities.Activity.Lap[Calories,Track{Trackpoint{Time>time,DistanceMeters>distance}>trackpoints}>laps]'],
+        ]);
+
+        return $laps;
+    }
+
+    private function traverseLaps($tracks): array
     {   
+        $return = [
+            'fastest_1km' => 0,
+            'fastest_5km' => 0,
+            'fastest_10km' => 0,
+            'fastest_21km' => 0,
+        ];
         $lapDistance = 1000;
         $currentInterval = 0;
         $lastTime = 0;
@@ -159,8 +192,8 @@ class testDistance extends Command
 
         $laps = [];
         $key = 0;
-        foreach ($tracks['points'] as $track) {
-            foreach ($track['tracks'] as $trackpoints) {
+        foreach ($tracks['data'] as $track) {
+            foreach ($track['laps'] as $trackpoints) {
                 foreach ($trackpoints['trackpoints'] as $trackpoint) {
                     $date = DateTime::createFromFormat('Y-m-d\TH:i:s.vP', $trackpoint['time']);
                     $time = (double) ($date->getTimestamp().','.$date->format('u'));
@@ -257,10 +290,18 @@ class testDistance extends Command
         echo sprintf("Fastest 1km: %s\nFastest 5km: %s\nFastest 10km: %s\n",
             $this->formatTime($this->getFastestLap($allSegments, 1000)),
             $this->formatTime($this->getFastestLap($allSegments, 5000)),
-            $this->formatTime($this->getFastestLap($allSegments, 10000))
+            $this->formatTime($this->getFastestLap($allSegments, 10000)),
+            $this->formatTime($this->getFastestLap($allSegments, 21000))
         );
 
-        return 0;
+        $return = [
+            'fastest_1km' => (int) $this->getFastestLap($allSegments, 1000),
+            'fastest_5km' => (int) $this->getFastestLap($allSegments, 5000),
+            'fastest_10km' => (int) $this->getFastestLap($allSegments, 10000),
+            'fastest_21km' => (int) $this->getFastestLap($allSegments, 21097),
+        ];
+
+        return $return;
     }
 
     private function formatTime($seconds)
